@@ -7,6 +7,7 @@ Spins up a GPU droplet, transfers and runs a CUDA executable, displays logs.
 import os
 import sys
 import time
+import uuid
 import argparse
 import requests
 import paramiko
@@ -16,15 +17,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration - update these or use environment variables
+# Configuration from environment variables
 CONFIG = {
-    "api_token": os.environ.get("DO_API_TOKEN", "your-api-token-here"),
+    "api_token": os.environ.get("DO_API_TOKEN"),
     "ssh_key_path": os.environ.get("SSH_KEY_PATH", str(Path.home() / ".ssh" / "id_rsa")),
-    "ssh_key_fingerprint": os.environ.get("DO_SSH_KEY_FINGERPRINT", ""),  # Your SSH key fingerprint in DO
-    "image_id": os.environ.get("DO_IMAGE_ID", ""),  # Your saved image ID or slug
+    "ssh_key_fingerprint": os.environ.get("DO_SSH_KEY_FINGERPRINT"),
+    "image_id": os.environ.get("DO_IMAGE_ID"),
     "region": os.environ.get("DO_REGION", "nyc1"),
-    "gpu_size": os.environ.get("DO_GPU_SIZE", "gpu-h100x1-80gb"),  # GPU droplet size
-    "droplet_name": "gpu-runner-temp",
+    "gpu_size": os.environ.get("DO_GPU_SIZE", "gpu-h100x1-80gb"),
 }
 
 API_BASE = "https://api.digitalocean.com/v2"
@@ -40,13 +40,14 @@ class DigitalOceanGPURunner:
         self.droplet_id = None
         self.droplet_ip = None
         self.ssh_client = None
+        self.droplet_name = f"gpu-{uuid.uuid4().hex[:8]}-droplet"
 
     def create_droplet(self) -> dict:
         """Create a GPU droplet from the saved image."""
-        print(f"🚀 Creating GPU droplet '{self.config['droplet_name']}'...")
+        print(f"🚀 Creating GPU droplet '{self.droplet_name}'...")
         
         payload = {
-            "name": self.config["droplet_name"],
+            "name": self.droplet_name,
             "region": self.config["region"],
             "size": self.config["gpu_size"],
             "image": self.config["image_id"],
@@ -88,7 +89,6 @@ class DigitalOceanGPURunner:
             status = droplet["status"]
             
             if status == "active":
-                # Get public IPv4
                 for network in droplet["networks"]["v4"]:
                     if network["type"] == "public":
                         self.droplet_ip = network["ip_address"]
@@ -152,10 +152,8 @@ class DigitalOceanGPURunner:
 
     def run_cuda_executable(self, remote_exe_path: str, args: str = "") -> None:
         """Make executable and run the CUDA program."""
-        # Make it executable
         self.run_command(f"chmod +x {remote_exe_path}", stream_output=False)
         
-        # Run the CUDA executable
         print("\n" + "=" * 60)
         print("📊 CUDA EXECUTABLE OUTPUT")
         print("=" * 60 + "\n")
@@ -240,75 +238,22 @@ class DigitalOceanGPURunner:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run CUDA executable on DigitalOcean GPU droplet",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Run a CUDA executable
-  python gpu_runner.py --exe ./my_cuda_program --image 12345678
-
-  # List your saved images
-  python gpu_runner.py --list-images
-
-  # List available GPU sizes
-  python gpu_runner.py --list-gpu-sizes
-
-  # Run with custom options
-  python gpu_runner.py --exe ./cuda_app --image my-gpu-image \\
-      --region nyc1 --size gpu-h100x1-80gb --keep
-
-Environment variables:
-  DO_API_TOKEN          - DigitalOcean API token
-  SSH_KEY_PATH          - Path to SSH private key
-  DO_SSH_KEY_FINGERPRINT - SSH key fingerprint in DigitalOcean
-  DO_IMAGE_ID           - Default image ID to use
-  DO_REGION             - Default region
-  DO_GPU_SIZE           - Default GPU droplet size
-        """,
-    )
-    
+    parser = argparse.ArgumentParser(description="Run CUDA executable on DigitalOcean GPU droplet")
     parser.add_argument("--exe", type=str, help="Path to local CUDA executable")
     parser.add_argument("--exe-args", type=str, default="", help="Arguments to pass to the executable")
-    parser.add_argument("--remote-path", type=str, default="/root/cuda_program", help="Remote path for executable")
-    parser.add_argument("--image", type=str, help="Image ID or slug to use")
-    parser.add_argument("--region", type=str, default=CONFIG["region"], help="Region for droplet")
-    parser.add_argument("--size", type=str, default=CONFIG["gpu_size"], help="GPU droplet size")
-    parser.add_argument("--name", type=str, default=CONFIG["droplet_name"], help="Droplet name")
     parser.add_argument("--keep", action="store_true", help="Keep droplet running after execution")
     parser.add_argument("--list-images", action="store_true", help="List available private images")
     parser.add_argument("--list-gpu-sizes", action="store_true", help="List available GPU sizes")
-    parser.add_argument("--token", type=str, help="DigitalOcean API token")
-    parser.add_argument("--ssh-key", type=str, help="Path to SSH private key")
-    parser.add_argument("--ssh-fingerprint", type=str, help="SSH key fingerprint in DigitalOcean")
     
     args = parser.parse_args()
     
-    # Update config with command-line arguments
-    config = CONFIG.copy()
-    if args.token:
-        config["api_token"] = args.token
-    if args.ssh_key:
-        config["ssh_key_path"] = args.ssh_key
-    if args.ssh_fingerprint:
-        config["ssh_key_fingerprint"] = args.ssh_fingerprint
-    if args.image:
-        config["image_id"] = args.image
-    if args.region:
-        config["region"] = args.region
-    if args.size:
-        config["gpu_size"] = args.size
-    if args.name:
-        config["droplet_name"] = args.name
-    
-    # Validate token
-    if config["api_token"] == "your-api-token-here":
-        print("❌ Error: Please set DO_API_TOKEN environment variable or use --token")
+    # Validate required env vars
+    if not CONFIG["api_token"]:
+        print("❌ Error: DO_API_TOKEN not set in environment/.env")
         sys.exit(1)
     
-    runner = DigitalOceanGPURunner(config)
+    runner = DigitalOceanGPURunner(CONFIG)
     
-    # Handle list commands
     if args.list_images:
         runner.list_images()
         return
@@ -317,27 +262,27 @@ Environment variables:
         runner.list_gpu_sizes()
         return
     
-    # Validate required arguments for running
     if not args.exe:
         print("❌ Error: --exe is required")
         parser.print_help()
         sys.exit(1)
     
-    if not config["image_id"]:
-        print("❌ Error: --image is required or set DO_IMAGE_ID")
+    if not CONFIG["image_id"]:
+        print("❌ Error: DO_IMAGE_ID not set in environment/.env")
         sys.exit(1)
     
     if not os.path.exists(args.exe):
         print(f"❌ Error: Executable not found: {args.exe}")
         sys.exit(1)
     
-    # Run the workflow
+    remote_path = "/root/cuda_program"
+    
     try:
         runner.create_droplet()
         runner.wait_for_droplet()
         runner.wait_for_ssh()
-        runner.transfer_file(args.exe, args.remote_path)
-        runner.run_cuda_executable(args.remote_path, args.exe_args)
+        runner.transfer_file(args.exe, remote_path)
+        runner.run_cuda_executable(remote_path, args.exe_args)
         
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted by user")
