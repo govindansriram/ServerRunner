@@ -9,6 +9,7 @@ import sys
 import time
 import uuid
 import argparse
+import threading
 import requests
 import paramiko
 from scp import SCPClient
@@ -191,6 +192,21 @@ class DigitalOceanGPURunner:
         if self.ssh_client:
             self.ssh_client.close()
 
+    def schedule_shutdown(self, minutes: int) -> None:
+        """Schedule droplet destruction after specified minutes."""
+        def shutdown_timer():
+            print(f"\n⏰ Droplet will auto-destroy in {minutes} minutes...")
+            for remaining in range(minutes, 0, -1):
+                time.sleep(60)
+                if remaining <= 5 or remaining % 5 == 0:
+                    print(f"⏰ Auto-destroy in {remaining} minute(s)...")
+            print("\n⏰ Time's up! Destroying droplet...")
+            self.destroy_droplet()
+        
+        timer_thread = threading.Thread(target=shutdown_timer, daemon=False)
+        timer_thread.start()
+        return timer_thread
+
     def list_images(self) -> None:
         """List available private images (snapshots)."""
         print("📷 Listing your saved images/snapshots...")
@@ -241,7 +257,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run CUDA executable on DigitalOcean GPU droplet")
     parser.add_argument("--exe", type=str, help="Path to local CUDA executable")
     parser.add_argument("--exe-args", type=str, default="", help="Arguments to pass to the executable")
-    parser.add_argument("--keep", action="store_true", help="Keep droplet running after execution")
+    parser.add_argument("--keep-alive", type=int, metavar="MINUTES", help="Keep droplet alive for N minutes after execution, then auto-destroy")
     parser.add_argument("--list-images", action="store_true", help="List available private images")
     parser.add_argument("--list-gpu-sizes", action="store_true", help="List available GPU sizes")
     
@@ -284,19 +300,24 @@ def main():
         runner.transfer_file(args.exe, remote_path)
         runner.run_cuda_executable(remote_path, args.exe_args)
         
+        if args.keep_alive:
+            print(f"\n💡 Droplet running at {runner.droplet_ip}")
+            print(f"   SSH: ssh root@{runner.droplet_ip}")
+            print(f"   Press Ctrl+C to destroy immediately")
+            timer = runner.schedule_shutdown(args.keep_alive)
+            timer.join()
+        else:
+            runner.destroy_droplet()
+        
     except KeyboardInterrupt:
-        print("\n\n⚠️  Interrupted by user")
+        print("\n\n⚠️  Interrupted by user - destroying droplet...")
+        runner.destroy_droplet()
     except Exception as e:
         print(f"\n❌ Error: {e}")
+        runner.destroy_droplet()
         raise
     finally:
         runner.cleanup()
-        if not args.keep:
-            runner.destroy_droplet()
-        else:
-            print(f"\n💡 Droplet kept running at {runner.droplet_ip}")
-            print(f"   SSH: ssh root@{runner.droplet_ip}")
-            print(f"   Don't forget to destroy it when done!")
 
 
 if __name__ == "__main__":
