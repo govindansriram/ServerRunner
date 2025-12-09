@@ -35,7 +35,8 @@ from scp import SCPClient
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+script_dir = Path(__file__).parent
+load_dotenv(script_dir / ".env")
 
 # Configuration from environment variables
 CONFIG = {
